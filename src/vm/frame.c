@@ -10,7 +10,9 @@
 #include "threads/thread.h"
 #include "threads/vaddr.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "userprog/syscall.h"
+#include "userprog/pagedir.h"
 
 
 static struct list frame_table;
@@ -18,6 +20,10 @@ static struct list frame_table;
 static struct lock frame_table_lock;
 
 static struct list_elem* clock_hand;
+
+
+static void frame_table_delete(struct frame_entry* f);
+
 
 /*Frame_table size = 64MB*/
 void
@@ -32,7 +38,7 @@ frame_table_insert(void* kpage, void* upage) {
 	struct frame_entry* f= malloc(sizeof(struct frame_entry));
 	struct thread* t = thread_current();
 	f->t = t;
-	f->physical_addr = vtop(kpage);
+	f->physical_addr = (void *)vtop(kpage);
 	f->page_addr = upage;
 	pagedir_set_accessed(t->pagedir,upage,true);
 	list_push_back(&frame_table,&f->elem);
@@ -41,7 +47,25 @@ frame_table_insert(void* kpage, void* upage) {
 		clock_hand = list_begin(&frame_table);
 }
 
-void
+bool
+frame_table_remove(void* upage){
+	struct frame_entry *temp;
+	temp = frame_table_search(upage);
+	if(temp == NULL)
+		return false;
+
+	else {
+		//pagedir unmapping
+		//frame table kpage free ->change to zero bytes
+		//frame table entry free
+		pagedir_clear_page(thread_current()->pagedir, upage);
+		palloc_free_page(ptov((uint32_t)temp->physical_addr));
+		frame_table_delete(temp);
+
+	}
+}
+
+static void
 frame_table_delete(struct frame_entry* f) {
 	list_remove(&f->elem);
 	free(f);
@@ -63,7 +87,7 @@ frame_allocate(void* kpage, void* upage) {
 void
 frame_evict(struct frame_entry* frame_entry) {
 
-	palloc_free_page( ptov(frame_entry->physical_addr) );
+	palloc_free_page( ptov((uint32_t)frame_entry->physical_addr) );
 	list_remove(&frame_entry->elem);
 }
 
@@ -78,7 +102,8 @@ frame_find_to_evict(){
 
 		pagedir_set_accessed(f->t->pagedir, f->page_addr, false);
 
-		if(clock_hand = list_next(clock_hand) == list_tail(&frame_table) )
+		clock_hand = list_next(clock_hand);
+		if(clock_hand == list_tail(&frame_table) )
 			clock_hand = list_begin(&frame_table);
 	}
 	frame_evict(f);

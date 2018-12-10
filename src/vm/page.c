@@ -76,6 +76,9 @@ spt_load(struct hash* spt, void* upage) {
 	if (e == NULL)
 		return false;
 	
+	if(upage > e->upage + e->offset)
+		return false;
+
 	file_seek(e->file, e->offset);
 	
 	//get physical memory space
@@ -95,8 +98,7 @@ spt_load(struct hash* spt, void* upage) {
 
 
 	//map page and frame and add to the frame table
-	if (!install_page (e->upage, kpage, e->writable)) 
-        {
+	if (!install_page (e->upage, kpage, e->writable)) {
           palloc_free_page (kpage);
           return false; 
         }

@@ -1,13 +1,19 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
 #include <syscall-nr.h>
+#include <string.h>
 #include "threads/thread.h"
 #include "devices/shutdown.h"
 #include "devices/input.h"
 #include "userprog/signal.h"
 #include "userprog/process.h"
 #include "threads/malloc.h"
+#include "threads/palloc.h"
 #include "threads/vaddr.h"
+#include "filesys/file.h"
+#include "vm/frame.h"
+#include "vm/page.h"
+
 
 #define mapid_t int
 
@@ -18,6 +24,10 @@ static bool put_user(uint8_t *udst, uint8_t byte);
 struct file* get_file_from_fd(int fd);
 bool validate_read(void *p, int size);
 bool validate_write(void *p, int size);
+
+static void
+mmap_insertion(struct list* mmap_table, struct file *file, uint32_t offset, uint32_t upage,
+	uint32_t read_bytes, mapid_t mapid);
 
 static void (*syscall_table[20])(struct intr_frame*) = {
   sys_halt,
@@ -425,61 +435,151 @@ void sys_close (struct intr_frame * f) {
   }
 }
 
+static void
+mmap_insertion(struct list* mmap_table, struct file *file, uint32_t offset, uint32_t upage,
+	uint32_t read_bytes, mapid_t mapid){
+
+	struct mmap_elem* mmap_elem;
+		
+	mmap_elem = malloc(sizeof(struct mmap_elem));
+	mmap_elem->file = file;
+	mmap_elem->upage = (void*)upage;
+	mmap_elem->offset = offset;
+	mmap_elem->read_bytes = read_bytes;
+	mmap_elem->mapid = mapid;
+
+	list_push_back(mmap_table, &mmap_elem->elem);
+}
+
 //return mapid and argument(int fd, void* addr)
 void sys_mmap(struct intr_frame * f) {
-	/*
+	
 	int fd;
-	void* addr;
+	uint32_t addr;
 	struct file* file;
-	struct list_elem * e;
-	struct mmap_elem* mmap_elem;
-	struct mmap_elem* mmap_iter;
 	struct thread* t;
+	uint32_t file_size;
+	uint32_t file_left;
+	uint32_t read_bytes;
+	uint8_t* kpage;
+	mapid_t mapid;
+	uint32_t offset;
 
 	t = thread_current();
 
 	fd = *(int *)(f->esp + 4);
-	addr = *(void *)(f->esp + 8);
+	addr = *(uint32_t *)(f->esp + 8);
 	addr = addr & ~PGMASK;
+	mapid = t->mmap_counter++;
 
 	file = get_file_from_fd(fd);
-	
-	if (file != NULL) {
-		mmap_elem = malloc(sizeof(struct mmap_elem));
-		mmap_elem->file = file;
-		mmap_elem->paddr = addr;
-		mmap_elem->mmapid_t = 2;
 
-		for (e = list_begin(&t->mmap_table); e != list_end(&t->mmap_table);
-			e = list_next(e)){
-			mmap_iter = list_entry(e, struct mmap_elem, elem);
-			if (mmap_iter->mmapid_t > mmap_elem->mmapid_t) {
-				e = list_prev(e);
-				list_insert(e, &mmap_elem->elem);
-				f->eax = mmap_elem->mmapid_t;
-				return;
-			}
-			mmap_elem->mmapid_t++;
-		}
-		list_push_back(&t->mmap_table, &mmap_elem->elem);
-		f->eax = mmap_elem->mmapid_t;
+	if(file != NULL){
+		f->eax = -1;
 		return;
 	}
 
-	f->eax = -1;
-	return; 
-	*/
+	kpage = palloc_get_page(PAL_USER);
+	if (kpage == NULL) {
+		frame_lock_acquire();
+		kpage = frame_find_to_evict();
+		frame_lock_release();
+	}
 
+	file_size = (uint32_t) file_length(file);
+	file_left = file_size;
+	offset = 0;
+
+	while(file_left > 0) {
+
+		read_bytes = (file_left < PGSIZE)? file_left : PGSIZE;
+
+		if (file_read (file, kpage, read_bytes) != (int) read_bytes){
+ 			palloc_free_page(kpage);
+			f->eax = -1;
+			return;
+   		}
+
+		mmap_insertion(&t->mmap_table, file, offset, addr, read_bytes, mapid);
+
+		file_left -= read_bytes;
+		offset += PGSIZE;
+		addr += PGSIZE;
+	} 
+
+
+	f->eax = mapid;
+	return; 
 }
 
 bool
-mmap_load(struct list* mmap_table, void* fault_address) {
+mmap_load(struct list* mmap_table, void* pageaddr) {
+
+	struct list_elem *it;
+	struct mmap_elem *e;
+	uint8_t *kpage;
+
+	for (it = list_begin (mmap_table); it != list_end (mmap_table);
+		it = list_next (it)){
+
+		e = list_entry (it, struct mmap_elem, elem);
+		if(e->upage == pageaddr){
+			//load;
+			file_seek(e->file, e->offset);
+
+			//get physical memory space
+			kpage = palloc_get_page(PAL_USER);
+		 	if (kpage == NULL) {
+				frame_lock_acquire();
+				kpage = frame_find_to_evict();
+				frame_lock_release();
+			}
+
+		//copy file from there
+		if(file_read (e->file, kpage, e->read_bytes) != (int) e->read_bytes){
+			palloc_free_page (kpage);
+		 	return false; 
+		}
+		memset (kpage + e->read_bytes, 0, PGSIZE - e->read_bytes);
+
+
+		//map page and frame and add to the frame table
+		if (!install_page (e->upage, kpage, true)) {
+			palloc_free_page (kpage);
+			return false; 
+		}
+
+
+		return true;
+		}
+	}
 	
+	return false;			
 }
 
 //return void and argument(mapid_t mapping)
 void sys_munmap(struct intr_frame * f) {
 
+	mapid_t mapping;
+	struct list_elem *it;
+	struct mmap_elem *e;
+	struct list *mmap_table;
+
+	mapping = *(mapid_t *)(f->esp + 4);
+	mmap_table = &thread_current()->mmap_table;
+
+	//search in mmap table
+	for (it = list_begin (mmap_table); it != list_end (mmap_table);
+		it = list_next (it)){
+
+		e = list_entry (it, struct mmap_elem, elem);
+		if(e->mapid == mapping){
+			frame_table_remove(e->upage);
+			list_remove(it);
+			free(e);
+		}
+
+	}
 
 
 

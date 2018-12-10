@@ -20,9 +20,12 @@ struct fd_elem {
 
 struct mmap_elem{
 	struct file* file;
+	uint32_t offset;
+	void* upage;
+	uint32_t read_bytes;
+	int mapid;
+
 	struct list_elem elem;
-	void* paddr;
-	int mmapid_t;
 };
 
 void kill_process(void);
@@ -47,6 +50,7 @@ void sys_close (struct intr_frame * f);
 void sys_mmap(struct intr_frame * f);
 void sys_munmap(struct intr_frame * f);
 
-
+//lazy load in exception handler to load memory mapped files
+bool mmap_load(struct list *mmap_table, void* pageaddr);
 
 #endif /* userprog/syscall.h */

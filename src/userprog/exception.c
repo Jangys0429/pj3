@@ -5,6 +5,8 @@
 #include "userprog/gdt.h"
 #include "userprog/signal.h"
 #include "userprog/process.h"
+#include "userprog/pagedir.h"
+#include "userprog/syscall.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
@@ -145,6 +147,7 @@ page_fault(struct intr_frame *f)
 	int count;
 	void* kpage;
 	void* upage;
+	uint32_t page_addr;
 
 	/* Obtain faulting address, the virtual address that was
 	   accessed to cause the fault.  It may point to code or to
@@ -164,9 +167,14 @@ page_fault(struct intr_frame *f)
 	//search in spt table
 	// and if there is a lazy loaded page, now we load the page and we have to be back from there.
 
-
+	page_addr = (uint32_t)fault_addr &  ~PGMASK;
+	
 	//lazy loading 1. executables in spt table, 2. mmap files in mmap_table
-	if (spt_load(&thread_current()->spt, (void *)((uint32_t)fault_addr &  ~PGMASK))) {
+	if (spt_load(&t->spt, (void*) page_addr)) {
+		return;
+	}
+	
+	if (mmap_load(&t->mmap_table, (void*) page_addr)){
 		return;
 	}
 	//stack growth
@@ -190,7 +198,6 @@ page_fault(struct intr_frame *f)
 			pagedir_set_page(t->pagedir, upage, kpage, false);
 			t->stack_size++;
 		}
-
 
 		f->esp = fault_addr;
 		return;

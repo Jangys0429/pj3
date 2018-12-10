@@ -104,14 +104,16 @@ struct thread
 
     struct list signal_list;
     struct list fd_table;
-	struct list mmap_table;
+
+    struct list mmap_table;
+    uint32_t mmap_counter;
 
     struct file *current_file;
 
-	struct hash spt;
-	struct lock spt_lock;
+    struct hash spt;
+    struct lock spt_lock;
 
-	uint32_t stack_size;
+    uint32_t stack_size;
 
 
     /* Owned by thread.c. */

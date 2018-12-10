@@ -484,6 +484,7 @@ init_thread (struct thread *t, const char *name, int priority)
   lock_init(&t->spt_lock);
   t->current_file = NULL;
   t->stack_size = 1;
+  t->mmap_counter = 2;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
