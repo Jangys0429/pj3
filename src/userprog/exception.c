@@ -4,12 +4,13 @@
 #include <round.h>
 #include "userprog/gdt.h"
 #include "userprog/signal.h"
+#include "userprog/process.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/vaddr.h"
+#include "threads/palloc.h"
 #include "vm/frame.h"
 #include "vm/page.h"
-#include "threads/vaddr.h"
-#include "threads/process.h"
 
 
 
@@ -140,9 +141,10 @@ page_fault(struct intr_frame *f)
 	void *fault_addr;  /* Fault address. */
 	struct thread* t;
 	void* stack_bound;
-	int stack_growing_size;
+	int stack_growth_size;
 	int count;
 	void* kpage;
+	void* upage;
 
 	/* Obtain faulting address, the virtual address that was
 	   accessed to cause the fault.  It may point to code or to
@@ -164,7 +166,7 @@ page_fault(struct intr_frame *f)
 
 
 	//lazy loading 1. executables in spt table, 2. mmap files in mmap_table
-	if (spt_load(&thread_current()->spt, fault_addr & ~PGMASK)) {
+	if (spt_load(&thread_current()->spt, (void *)((uint32_t)fault_addr &  ~PGMASK))) {
 		return;
 	}
 	//stack growth
@@ -185,8 +187,7 @@ page_fault(struct intr_frame *f)
 			frame_lock_release(); 
 
 			pagedir_get_page(t->pagedir, upage);
-			pagedir_set_page(t->pagedir, upage, kpage, false));
-
+			pagedir_set_page(t->pagedir, upage, kpage, false);
 			t->stack_size++;
 		}
 

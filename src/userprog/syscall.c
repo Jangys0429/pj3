@@ -33,7 +33,7 @@ static void (*syscall_table[20])(struct intr_frame*) = {
   sys_seek,
   sys_tell,
   sys_close,
-  sys,mmap,
+  sys_mmap,
   sys_munmap
 }; // syscall jmp table
 
@@ -427,6 +427,7 @@ void sys_close (struct intr_frame * f) {
 
 //return mapid and argument(int fd, void* addr)
 void sys_mmap(struct intr_frame * f) {
+	/*
 	int fd;
 	void* addr;
 	struct file* file;
@@ -467,71 +468,13 @@ void sys_mmap(struct intr_frame * f) {
 
 	f->eax = -1;
 	return; 
+	*/
 
 }
 
 bool
 mmap_load(struct list* mmap_table, void* fault_address) {
-
-	void* paddr;
-	paddr = fault_address
-
-
-
-
-
-
-
-
-
-
-
-
-	uint32_t read_bytes;
-	uint32_t zero_bytes;
-
-	while (read_bytes > 0 || zero_bytes > 0)
-	{
-		/* Calculate how to fill this page.
-		We will read PAGE_READ_BYTES bytes from FILE
-		and zero the final PAGE_ZERO_BYTES bytes. */
-		size_t page_read_bytes = read_bytes < PGSIZE ? read_bytes : PGSIZE;
-		size_t page_zero_bytes = PGSIZE - page_read_bytes;
-
-		/* Get a page of memory. */
-		uint8_t *kpage = palloc_get_page(PAL_USER);
-
-		/*Eviction is required*/
-		if (kpage == NULL) {
-			frame_lock_acquire();
-			kpage = frame_find_to_evict();
-			frame_lock_release();
-		}
-		/* Load this page. */
-		if (file_read(file, kpage, page_read_bytes) != (int)page_read_bytes)
-		{
-			palloc_free_page(kpage);
-			return false;
-		}
-		memset(kpage + page_read_bytes, 0, page_zero_bytes);
-
-		/* Add the page to the process's address space. */
-		if (!install_page(upage, kpage, writable))
-		{
-			palloc_free_page(kpage);
-			return false;
-		}
-
-		//Allocate frame + Add to frame table
-
-		/* Advance. */
-		read_bytes -= page_read_bytes;
-		zero_bytes -= page_zero_bytes;
-		upage += PGSIZE;
-	}
-	return true;
-
-
+	
 }
 
 //return void and argument(mapid_t mapping)

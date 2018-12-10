@@ -1,3 +1,4 @@
+#include "vm/frame.h"
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -8,17 +9,15 @@
 #include "threads/synch.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/palloc.h"
 #include "userprog/syscall.h"
-#include "frame.h"
+
 
 static struct list frame_table;
 
 static struct lock frame_table_lock;
 
 static struct list_elem* clock_hand;
-
-
-
 
 /*Frame_table size = 64MB*/
 void
@@ -35,7 +34,7 @@ frame_table_insert(void* kpage, void* upage) {
 	f->t = t;
 	f->physical_addr = vtop(kpage);
 	f->page_addr = upage;
-	pagedir_set_accessed(t->pd,upage,true);
+	pagedir_set_accessed(t->pagedir,upage,true);
 	list_push_back(&frame_table,&f->elem);
 
 	if (list_size(&frame_table) == 1)
@@ -50,7 +49,7 @@ frame_table_delete(struct frame_entry* f) {
 
 //frame allocate
 void*
-frame_allocate(void* kapge, void* upage) {
+frame_allocate(void* kpage, void* upage) {
 	if (kpage == NULL) {
 		//clock alogrithm
 		frame_find_to_evict();
@@ -64,24 +63,28 @@ frame_allocate(void* kapge, void* upage) {
 void
 frame_evict(struct frame_entry* frame_entry) {
 	palloc_free( ptov(frame_entry->physical_addr) );
-	list_remove(&frame_entry->list_elem);
+	list_remove(&frame_entry->elem);
 }
 
 
 //find to evict with clock algorithm
 
-void
+void *
 frame_find_to_evict(){
 	struct frame_entry* f = list_entry(clock_hand, struct frame_entry, elem);
-	while (pagedir_is_accessed(f->t->pd, f->page_addr) == true;){
+	while (pagedir_is_accessed(f->t->pagedir, f->page_addr) == true){
 		f = list_entry(clock_hand, struct frame_entry, elem);
 
-		pagedir_set_accessed(f->t->pd, f->page_addr, false);
+		pagedir_set_accessed(f->t->pagedir, f->page_addr, false);
 
 		if(clock_hand = list_next(clock_hand) == list_tail(&frame_table) )
 			clock_hand = list_begin(&frame_table);
 	}
 	frame_evict(f);
+
+	
+	return palloc_get_page(PAL_USER);
+
 }
 
 struct frame_entry*

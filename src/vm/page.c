@@ -1,14 +1,17 @@
-#include "userprog/exception.h"
+#include "vm/page.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <hash.h>
+#include <stdlib.h>
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
-#include "userprog/syscall.h"
 #include "threads/synch.h"
-#include <hash.h>
-#include "page.h"
-
+#include "threads/vaddr.h"
+#include "threads/palloc.h"
+#include "userprog/syscall.h"
+#include "userprog/exception.h"
+#include "vm/frame.h"
 
 static unsigned
 hash_func(const struct hash_elem *e, void *aux) {
@@ -22,13 +25,13 @@ hash_less(const struct hash_elem *a, const struct hash_elem *b,	void *aux) {
 
 void
 spt_init (struct hash* spt) {
-	hash_init(&spt, &hash_func, &hash_less, NULL);
+	hash_init(spt, &hash_func, &hash_less, NULL);
 }
 
 bool
 spt_insert(struct hash* spt, struct file *file, uint32_t offset, uint8_t *upage,
 	uint32_t read_bytes, bool writable) {
-	struct spt_entry e = malloc(sizeof(struct spt_entry));
+	struct spt_entry* e = malloc(sizeof(struct spt_entry));
 	e->file = file;
 	e->offset = offset;
 	e->upage = upage;
@@ -61,26 +64,25 @@ spt_get_page(struct hash* spt, void* upage) {
 //lazy load
 bool
 spt_load(struct hash* spt, void* upage) {
-	struct spt_entry* e;
-	struct Elf32_Phdr phdr;
+	struct spt_entry *e;
 	uint8_t *kpage;
 
-	e = spt_get_page(upage);
+	e = spt_get_page(&thread_current()->spt, upage);
 	if (e == NULL)
-		return false;
+		eturn false;
 	
 	file_seek(e->file, e->offset);
 	
 	//get physical memory space
 	kpage = palloc_get_page(PAL_USER);
- 	if (kpage == NULL) {
+ 	if (kpage =r= NULL) {
 		frame_lock_acquire();
 		kpage = frame_find_to_evict();
 		frame_lock_release();
 	}
 
 	//copy file from there
-	if(file_read (file, kpage, e->read_bytes) != (int) e->read_bytes){
+	if(file_read (e->file, kpage, e->read_bytes) != (int) e->read_bytes){
 		palloc_free_page (kpage);
          	return false; 
 	}
@@ -88,7 +90,7 @@ spt_load(struct hash* spt, void* upage) {
 
 
 	//map page and frame and add to the frame table
-	if (!install_page (upage, kpage, writable)) 
+	if (!install_page (e->upage, kpage, e->writable)) 
         {
           palloc_free_page (kpage);
           return false; 
@@ -108,8 +110,6 @@ spt_destroy(struct hash* spt) {
 
 }
 
-
-bool
 
 
 
