@@ -62,7 +62,8 @@ frame_allocate(void* kpage, void* upage) {
 //evict argument frame_entry
 void
 frame_evict(struct frame_entry* frame_entry) {
-	palloc_free( ptov(frame_entry->physical_addr) );
+
+	palloc_free_page( ptov(frame_entry->physical_addr) );
 	list_remove(&frame_entry->elem);
 }
 

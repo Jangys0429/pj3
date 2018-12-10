@@ -12,15 +12,15 @@ struct frame_entry {
 	struct thread* t;
 };
 
-void frame_table_init();
+void frame_table_init(void);
 void frame_table_insert(void* kpage, void* upage);
 void frame_table_delete(struct frame_entry * f);
 void* frame_allocate(void * kapge, void * upage);
 void frame_evict(struct frame_entry* frame_entry);
-void* frame_find_to_evict();
+void* frame_find_to_evict(void);
 struct frame_entry * frame_table_search(void * upage);
-void frame_lock_acquire();
-void frame_lock_release();
+void frame_lock_acquire(void);
+void frame_lock_release(void);
 
 
 #endif /* userprog/exception.h */

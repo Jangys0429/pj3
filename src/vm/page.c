@@ -3,14 +3,17 @@
 #include <stdio.h>
 #include <hash.h>
 #include <stdlib.h>
+#include <string.h>
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "threads/palloc.h"
+#include "threads/malloc.h"
 #include "userprog/syscall.h"
 #include "userprog/exception.h"
+#include "userprog/process.h"
 #include "vm/frame.h"
 
 static unsigned
@@ -39,7 +42,7 @@ spt_insert(struct hash* spt, struct file *file, uint32_t offset, uint8_t *upage,
 	e->writable = writable;
 
 	lock_acquire(&thread_current()->spt_lock);
-	if(hash_insert(&spt, &e->elem) == NULL){
+	if(hash_insert(spt, &e->elem) == NULL){
 		lock_release(&thread_current()->spt_lock);
 		return false;
 	}
@@ -51,10 +54,12 @@ spt_insert(struct hash* spt, struct file *file, uint32_t offset, uint8_t *upage,
 struct spt_entry*
 spt_get_page(struct hash* spt, void* upage) {
 	struct spt_entry temp;
-	struct hash_elem e;
+	struct hash_elem *e;
 	temp.upage = upage; 
 
-	if (e = hash_find(&spt, &temp->elem) != NULL)
+	e = hash_find(spt, &temp.elem);
+
+	if (e != NULL)
 		return hash_entry(e, struct spt_entry, elem);
 	else
 		return NULL;
@@ -69,13 +74,13 @@ spt_load(struct hash* spt, void* upage) {
 
 	e = spt_get_page(&thread_current()->spt, upage);
 	if (e == NULL)
-		eturn false;
+		return false;
 	
 	file_seek(e->file, e->offset);
 	
 	//get physical memory space
 	kpage = palloc_get_page(PAL_USER);
- 	if (kpage =r= NULL) {
+ 	if (kpage == NULL) {
 		frame_lock_acquire();
 		kpage = frame_find_to_evict();
 		frame_lock_release();
