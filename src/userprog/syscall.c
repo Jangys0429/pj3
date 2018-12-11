@@ -1,5 +1,6 @@
 #include "userprog/syscall.h"
 #include <stdio.h>
+#include <string.h>
 #include <syscall-nr.h>
 #include "threads/thread.h"
 #include "devices/shutdown.h"
@@ -7,7 +8,13 @@
 #include "userprog/signal.h"
 #include "userprog/process.h"
 #include "threads/malloc.h"
+#include "threads/palloc.h"
 #include "threads/vaddr.h"
+#include "filesys/file.h"
+#include "vm/frame.h"
+#include "vm/page.h"
+
+#define mapid_t int
 
 static void syscall_handler (struct intr_frame *);
 
@@ -16,6 +23,10 @@ static bool put_user(uint8_t *udst, uint8_t byte);
 struct file* get_file_from_fd(int fd);
 bool validate_read(void *p, int size);
 bool validate_write(void *p, int size);
+
+static bool
+mmap_insertion(struct list* mmap_table, struct file *file, uint32_t offset, uint32_t upage,
+	uint32_t read_bytes, mapid_t mapid);
 
 static void (*syscall_table[20])(struct intr_frame*) = {
   sys_halt,
@@ -30,7 +41,9 @@ static void (*syscall_table[20])(struct intr_frame*) = {
   sys_write,
   sys_seek,
   sys_tell,
-  sys_close
+  sys_close,
+  sys_mmap,
+  sys_munmap
 }; // syscall jmp table
 
 /* Reads a byte at user virtual address UADDR.
@@ -111,7 +124,7 @@ static void
 syscall_handler (struct intr_frame *f) 
 { 
   int syscall_num = validate_read(f->esp, 4) ? *(int*)(f->esp) : -1;
-  
+
   if(syscall_num < 0 || syscall_num >= 20) {
     kill_process();
   }
@@ -224,6 +237,8 @@ void sys_open (struct intr_frame * f) {
   struct fd_elem *f_elem;
   struct fd_elem *fd_elem;
   
+ 
+
   if(!validate_read(f->esp + 4, 4)) kill_process();
 
   name = *(char **)(f->esp + 4);
@@ -238,11 +253,11 @@ void sys_open (struct intr_frame * f) {
   
   if(itr == name) {
     f->eax = -1;
-    return;
   }
   
   t = thread_current();
   file = filesys_open(name); //if fails, it returns NULL
+
   f_elem = malloc(sizeof(struct fd_elem));
   
   if(file == NULL) {
@@ -265,7 +280,9 @@ void sys_open (struct intr_frame * f) {
     }
     f_elem->fd++;
   }
+
   list_push_back(&t->fd_table, &f_elem->elem);
+
   f->eax = f_elem->fd;
 }
 
@@ -420,3 +437,285 @@ void sys_close (struct intr_frame * f) {
     }
   }
 }
+
+static bool
+mmap_insertion(struct list* mmap_table, struct file *file, uint32_t offset, uint32_t upage,
+	uint32_t read_bytes, mapid_t mapid){
+
+	struct mmap_elem* mmap_elem;
+	struct mmap_elem* e;
+	struct list_elem* it;
+		
+	mmap_elem = malloc(sizeof(struct mmap_elem));
+	mmap_elem->file = file_reopen(file);
+	mmap_elem->upage = (void*)upage;
+	mmap_elem->offset = offset;
+	mmap_elem->read_bytes = read_bytes;
+	mmap_elem->mapid = mapid;
+
+	//search upage are same return false;
+
+	for (it = list_begin (mmap_table); it != list_end (mmap_table);
+		it = list_next (it)){
+		e = list_entry (it, struct mmap_elem, elem);
+		if(e->upage == upage)
+			return false;
+	}
+
+	list_push_back(mmap_table, &mmap_elem->elem);
+	return true;
+}
+
+//return mapid and argument(int fd, void* addr)
+void sys_mmap(struct intr_frame * f) {
+	
+	int fd;
+	uint32_t addr;
+	struct file* file;
+	struct thread* t;
+	uint32_t file_size;
+	uint32_t file_left;
+	uint32_t read_bytes;
+	uint8_t* kpage;
+	mapid_t mapid;
+	uint32_t offset;
+
+	t = thread_current();
+	fd = *(int *)(f->esp + 4);
+	addr = *(uint32_t *)(f->esp + 8);
+
+	if(	addr % PGSIZE != 0 
+		|| spt_get_page(&t->spt, addr) != NULL
+		|| addr == NULL
+		|| addr >= PHYS_BASE - t->stack_size * (PGSIZE + 1)
+		) {
+		f->eax = -1;
+		return;
+	}
+
+	//see that it is under stack
+
+	addr = addr & ~PGMASK;
+	mapid = t->mmap_counter++;
+
+	file = get_file_from_fd(fd);
+	
+	if(file == NULL){
+		f->eax = -1;
+		return;
+	}
+
+	kpage = palloc_get_page(PAL_USER);
+	if (kpage == NULL) {
+		frame_lock_acquire();
+		kpage = frame_find_to_evict();
+		frame_lock_release();
+	}
+
+	file_size = (uint32_t) file_length(file);
+	file_left = file_size;
+
+	offset = 0;
+	while(file_left > 0) {
+
+		read_bytes = (file_left < PGSIZE)? file_left : PGSIZE;
+
+		if (file_read (file, kpage, read_bytes) != (int) read_bytes){
+ 			palloc_free_page(kpage);
+			f->eax = -1;
+			//printf("file read failed\n");
+			return;
+   		}
+
+		if(!mmap_insertion(&t->mmap_table, file, offset, addr, read_bytes, mapid)){
+			f->eax = -1;
+			return;
+		}
+
+		file_left -= read_bytes;
+		offset += PGSIZE;
+		addr += PGSIZE;
+	} 
+
+	f->eax = mapid;
+	return; 
+}
+
+bool
+mmap_load(struct list* mmap_table, void* pageaddr) {
+
+	struct list_elem *it;
+	struct mmap_elem *e;
+	struct mmap_elem *find;
+	uint8_t *kpage;
+	struct thread* t;
+
+	t= thread_current();
+
+	e = NULL;
+	for (it = list_begin (mmap_table); it != list_end (mmap_table);
+		it = list_next (it)){
+
+		find = list_entry (it, struct mmap_elem, elem);
+		if(find->upage == pageaddr){
+			e = find;
+			break;
+		}	
+	}
+
+	if(e == NULL)
+		return false;
+
+	
+
+
+   	//load;
+	file_seek(e->file, e->offset);
+
+	//get physical memory space
+	kpage = palloc_get_page(PAL_USER);
+ 	if (kpage == NULL) {
+		frame_lock_acquire();
+		kpage = frame_find_to_evict();
+		frame_lock_release();
+	}
+
+
+	//copy file from there
+	if(file_read (e->file, kpage, e->read_bytes) != (int) e->read_bytes){
+		
+		palloc_free_page (kpage);
+ 		return false; 
+				
+	}
+
+	memset (kpage + e->read_bytes, 0, PGSIZE - e->read_bytes);
+
+	//printf("install upage:%p, kpage:%p\n", e->upage, kpage);
+
+	//map page and frame and add to the frame table
+	if (!install_page (e->upage, kpage, true)) {
+		palloc_free_page (kpage);
+		return false; 
+	}
+
+	return true;
+}
+
+//return void and argument(mapid_t mapping)
+void sys_munmap(struct intr_frame * f) {
+
+	mapid_t mapping;
+	struct list_elem *it;
+	struct mmap_elem *e;
+	struct list *mmap_table;
+
+
+	mapping = *(mapid_t *)(f->esp + 4);
+	mmap_table = &thread_current()->mmap_table;
+
+	//search in mmap table
+	it = list_begin (mmap_table);
+	
+	struct frame_entry* temp;
+	void* kpage = NULL;
+
+	
+
+	while(it != list_end (mmap_table)){
+		e = list_entry (it, struct mmap_elem, elem);
+
+		if(e->mapid == mapping){
+			//if dirty right back to disk
+			temp = frame_table_search(e->upage);
+			if(temp != NULL) {
+				kpage = ptov((uint32_t)temp->physical_addr & ~PGMASK);
+
+			//	printf("kpage : %p\n", kpage);
+				
+			//	bool a = pagedir_is_dirty(&thread_current()->pagedir, e->upage);
+				bool a = true;
+
+			//	kpage = temp->physical_addr;
+			//	bool b = pagedir_is_dirty(&thread_current()->pagedir, kpage);
+			//	printf("a: %d, b:%d \n", a, b);
+				/*
+				if(pagedir_is_dirty(&thread_current()->pagedir, e->upage)
+				|| pagedir_is_dirty(&thread_current()->pagedir, kpage)
+					){
+					file_write_at (e->file, e->upage, e->read_bytes, e->offset);
+				}*/
+
+			}
+			frame_table_remove(e->upage);
+			file_close(e->file);
+			it = list_next(it);
+			list_remove(&e->elem);
+			free(e);
+		}
+		else
+			it = list_next(it);
+	}
+
+	return;
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

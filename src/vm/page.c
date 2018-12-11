@@ -36,6 +36,8 @@ bool
 spt_insert(struct hash* spt, struct file *file, uint32_t page_offset, uint8_t *upage,
 	uint32_t read_bytes, bool writable, uint32_t ofs) {
 
+
+
 	struct spt_entry* e = malloc(sizeof(struct spt_entry));
 	e->file = file;
 	e->page_offset = page_offset;
@@ -79,52 +81,39 @@ spt_load(struct hash* spt, void* upage) {
 
 	e = spt_get_page(spt, upage);
 	
-	printf("Hash entry upage : %x\n",e->upage);
-	printf("Hash entry file : %x\n", e->file);
-	printf("entry offset:%d, entry ofs:%d \n", e->page_offset, e->ofs);
-
-
 	if (e == NULL)
 		return false;
-	
-	if(upage > e->upage + e->page_offset)
-		return false;
-
-	
 	//printf("file position: %d\n\n\n", file_tell(e->file));
 
 	file_seek(e->file, e->page_offset + e->ofs);
 	//printf("file position: %d\n", file_tell(e->file));
 
 	//get physical memory space
-	kpage = palloc_get_page(PAL_USER);
+	kpage = palloc_get_page(PAL_USER | PAL_ZERO);
  	if (kpage == NULL) {
 		frame_lock_acquire();
 		kpage = frame_find_to_evict();
 		frame_lock_release();
 	}
 
-	//printf("file position: %d\n", file_tell(e->file));
-	
-
 	//copy file from there
-	/*
+	
 	if(file_read (e->file, kpage, e->read_bytes) != (int) e->read_bytes){
 		palloc_free_page (kpage);
          	return false; 
 	}
-	*/
+	
+	//printf("Read bytes: %d\n", e->read_bytes);
 	
 	memset (kpage + e->read_bytes, 0, PGSIZE - e->read_bytes);
 
 	
-
 	
-	//map page and frame and add to the frame table
 	if (!install_page (e->upage, kpage, e->writable)) {
           palloc_free_page (kpage);
           return false; 
         }
+
 	
 	return true;
 }

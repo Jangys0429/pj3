@@ -1,6 +1,7 @@
 #include "userprog/exception.h"
 #include <inttypes.h>
 #include <stdio.h>
+#include <round.h>
 #include "userprog/gdt.h"
 #include "userprog/signal.h"
 #include "userprog/process.h"
@@ -161,27 +162,53 @@ page_fault (struct intr_frame *f)
   intr_enable ();
   t = thread_current();
   page_addr = (uint32_t)fault_addr &  ~PGMASK;
+
+  /* Count page faults. */
+  page_fault_cnt++;
 	
   //lazy loading 1. executables in spt table, 2. mmap files in mmap_table
-
-  printf("Find key : %x\n",page_addr);
-
-
-  
-  if (spt_load(&t->spt, (void*) page_addr)) {
-    printf("load success\n");
+  if (spt_load(&t->spt, (void*) page_addr)
+      || mmap_load(&t->mmap_table, (void *) page_addr)
+     ){
     return;
   }
 
 
 
+//stack growth
+  stack_bound = PHYS_BASE - (t->stack_size * PGSIZE);
+
+  if (fault_addr < stack_bound
+  	&& fault_addr >= PHYS_BASE - (2048 * PGSIZE) 
+	&& fault_addr >= f->esp-32
+	){
+	//printf("it needs to growth\n");
+	stack_growth_size = ROUND_UP(stack_bound - fault_addr, PGSIZE) / PGSIZE;
+	upage = stack_bound;
+	for (count = 0; count < stack_growth_size; count++) {
+		upage -= PGSIZE;
+		kpage = palloc_get_page(PAL_USER | PAL_ZERO);
+	 	if (kpage == NULL) {
+			frame_lock_acquire();
+			kpage = frame_find_to_evict();
+			frame_lock_release();
+		}
+
+		if(pagedir_get_page (t->pagedir, upage) == NULL
+			&& pagedir_set_page (t->pagedir, upage, kpage, true)){
+			frame_lock_acquire();
+			frame_allocate(kpage, upage);
+			frame_lock_release();
+ 		}else{
+			return;
+		}
+		t->stack_size++;
+	}
+	return;
+  }
 
 
-
-
-
-  /* Count page faults. */
-  page_fault_cnt++;
+  
 
   /* Determine cause. */
   not_present = (f->error_code & PF_P) == 0;

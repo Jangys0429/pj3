@@ -476,17 +476,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
   ASSERT (ofs % PGSIZE == 0);
 
   uint32_t page_offset;
+  uint32_t spt_read_bytes;
   struct thread* t;
-
-  printf("load_segment: file pointer %x\n", file);
-  printf("ofs:%d, upage:%x", ofs, upage);
-
-
   t = thread_current();
   file_seek (file, ofs);
 
 //////////////////
-  uint8_t *kpage = palloc_get_page(PAL_USER);
+  uint8_t *kpage = palloc_get_page(PAL_USER | PAL_ZERO);
   if (kpage == NULL) {
 	  frame_lock_acquire();
 	  kpage = frame_find_to_evict();
@@ -518,19 +514,15 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       //memset (kpage + page_read_bytes, 0, page_zero_bytes);
 
  
-
-
+      spt_read_bytes = read_bytes > PGSIZE ? PGSIZE : read_bytes;
 
       //insert spt
-      printf("\nspt table insert ofs:\n", ofs);
-      if(!spt_insert(&t->spt, file, page_offset, upage, read_bytes, writable, ofs)){
+      if(!spt_insert(&t->spt, file, page_offset, upage, spt_read_bytes, writable, ofs)){
           palloc_free_page (kpage);
           return false; 
       
       }
     
-      printf("Spt - Key : %x\n",upage);
-
       /* Add the page to the process's address space. 
       if (!install_page (upage, kpage, writable)) {
           palloc_free_page (kpage);

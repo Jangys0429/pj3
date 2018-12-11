@@ -55,9 +55,6 @@ frame_table_remove(void* upage){
 		return false;
 
 	else {
-		//pagedir unmapping
-		//frame table kpage free ->change to zero bytes
-		//frame table entry free
 		pagedir_clear_page(thread_current()->pagedir, upage);
 		palloc_free_page(ptov((uint32_t)temp->physical_addr));
 		frame_table_delete(temp);
@@ -67,6 +64,12 @@ frame_table_remove(void* upage){
 
 static void
 frame_table_delete(struct frame_entry* f) {
+	/*
+	if(list_entry(clock_hand, struct frame_entry, elem) == f){
+		clock_hand = list_next(clock_hand);
+		if(clock_hand == list_tail(&frame_table))
+			clock_hand = list_begin(&frame_table);
+	}*/
 	list_remove(&f->elem);
 	free(f);
 }
@@ -76,8 +79,7 @@ void*
 frame_allocate(void* kpage, void* upage) {
 	if (kpage == NULL) {
 		//clock alogrithm
-		frame_find_to_evict();
-		kpage = palloc_get_page(PAL_USER);
+		kpage = frame_find_to_evict();
 	}
 	//Add to frame table & return
 	frame_table_insert(kpage, upage);
@@ -88,7 +90,7 @@ void
 frame_evict(struct frame_entry* frame_entry) {
 
 	palloc_free_page( ptov((uint32_t)frame_entry->physical_addr) );
-	list_remove(&frame_entry->elem);
+	frame_table_delete(frame_entry);
 }
 
 
@@ -99,17 +101,16 @@ frame_find_to_evict(){
 	struct frame_entry* f = list_entry(clock_hand, struct frame_entry, elem);
 	while (pagedir_is_accessed(f->t->pagedir, f->page_addr) == true){
 		f = list_entry(clock_hand, struct frame_entry, elem);
-
 		pagedir_set_accessed(f->t->pagedir, f->page_addr, false);
-
 		clock_hand = list_next(clock_hand);
 		if(clock_hand == list_tail(&frame_table) )
 			clock_hand = list_begin(&frame_table);
+		//f = list_entry(clock_hand, struct frame_entry, elem);
 	}
 	frame_evict(f);
 
 	
-	return palloc_get_page(PAL_USER);
+	return palloc_get_page(PAL_USER | PAL_ZERO);
 
 }
 
